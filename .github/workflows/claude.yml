@@ -1,0 +1,27 @@
+name: Claude Code Interactive
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  claude-interaction:
+    # Only run if someone mentions @claude in a comment
+    if: contains(github.event.comment.body, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # Required to commit fixes back to the branch
+      pull-requests: write  # Required to post comments and progress updates
+      issues: write        # Required to read and respond to mentions
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # Give Claude full git history to understand context
+
+      - name: Claude Code Action
+        uses: anthropics/claude-code-action@v1
+        with:
+          # Your API key stored in GitHub Secrets
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # Optional: Limit how many iterations Claude can perform
+          claude_args: "--max-turns 10"
