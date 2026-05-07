@@ -1,0 +1,84 @@
+name: Auto PR Creator with Claude Review
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+jobs:
+  create-pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    outputs:
+      pr_number: ${{ steps.create-pr.outputs.pr_number }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify branch is up to date with main
+        run: |
+          git fetch origin main
+          BEHIND=$(git rev-list HEAD..origin/main --count)
+          if [ "$BEHIND" -gt 0 ]; then
+            echo "::error::Branch '${{ github.ref_name }}' is $BEHIND commit(s) behind main. Rebase or merge main before pushing."
+            exit 1
+          fi
+          echo "Branch is up to date with main."
+
+      - name: Create or get PR
+        id: create-pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH="${{ github.ref_name }}"
+
+          AHEAD=$(git rev-list origin/main..HEAD --count)
+          if [ "$AHEAD" -eq 0 ]; then
+            echo "No commits ahead of main — skipping PR creation."
+            exit 0
+          fi
+
+          EXISTING=$(gh pr list --head "$BRANCH" --base main --json number --jq '.[0].number // empty')
+          if [ -n "$EXISTING" ]; then
+            echo "PR #$EXISTING already exists for $BRANCH"
+            echo "pr_number=$EXISTING" >> "$GITHUB_OUTPUT"
+          else
+            TITLE=$(echo "$BRANCH" | sed 's|[/_-]| |g')
+            PR_URL=$(gh pr create \
+              --title "$TITLE" \
+              --body "Auto-generated PR from branch \`$BRANCH\`." \
+              --base main \
+              --head "$BRANCH")
+            PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
+            echo "Created PR #$PR_NUMBER: $PR_URL"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          fi
+
+  claude-review:
+    needs: create-pr
+    if: needs.create-pr.outputs.pr_number != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Code Review
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
+          plugins: 'code-review@claude-code-plugins'
+          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ needs.create-pr.outputs.pr_number }}'
