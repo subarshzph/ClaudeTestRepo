@@ -5,14 +5,16 @@ on:
     branches-ignore:
       - main
 
+# When this workflow creates a PR, the pull_request:opened event fires and
+# claude-code-review.yml picks it up automatically — no need to invoke
+# claude-code-action here (it rejects non-PR event types).
+
 jobs:
   create-pr:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: write
-    outputs:
-      pr_number: ${{ steps.create-pr.outputs.pr_number }}
 
     steps:
       - name: Checkout repository
@@ -46,7 +48,6 @@ jobs:
           EXISTING=$(gh pr list --head "$BRANCH" --base main --json number --jq '.[0].number // empty')
           if [ -n "$EXISTING" ]; then
             echo "PR #$EXISTING already exists for $BRANCH"
-            echo "pr_number=$EXISTING" >> "$GITHUB_OUTPUT"
           else
             TITLE=$(echo "$BRANCH" | sed 's|[/_-]| |g')
             PR_URL=$(gh pr create \
@@ -54,31 +55,5 @@ jobs:
               --body "Auto-generated PR from branch \`$BRANCH\`." \
               --base main \
               --head "$BRANCH")
-            PR_NUMBER=$(echo "$PR_URL" | grep -oE '[0-9]+$')
-            echo "Created PR #$PR_NUMBER: $PR_URL"
-            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+            echo "Created PR: $PR_URL"
           fi
-
-  claude-review:
-    needs: create-pr
-    if: needs.create-pr.outputs.pr_number != ''
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      pull-requests: read
-      issues: read
-      id-token: write
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Run Claude Code Review
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ needs.create-pr.outputs.pr_number }}'
